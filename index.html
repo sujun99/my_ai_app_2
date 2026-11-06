@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>나만의 AI</title>
+<style>
+  :root { --bg: #F8FAFC; --card: #FFFFFF; --ink: #1E293B; --muted: #64748B; --line: #E2E8F0;
+          --main: #6366F1; --main-lt: #E0E7FF; --ok: #059669; --bad: #F43F5E; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; background: var(--bg); color: var(--ink); }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-height: 100vh; }
+  header { display: flex; justify-content: space-between; align-items: center; }
+  h1 { font-size: 24px; margin: 0; }
+  #net { font-size: 13px; padding: 4px 10px; border-radius: 999px; background: #D1FAE5; color: var(--ok); }
+  #net.off { background: #FFE4E6; color: var(--bad); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  label { font-size: 13px; color: var(--muted); }
+  select, input, textarea, button { font: inherit; border-radius: 10px; border: 1px solid var(--line); padding: 8px 10px; }
+  textarea { width: 100%; resize: vertical; }
+  button { background: var(--main); color: #fff; border: none; cursor: pointer; font-weight: bold; }
+  button.sub { background: var(--main-lt); color: var(--main); }
+  button:disabled { opacity: .45; cursor: default; }
+  progress { width: 100%; height: 10px; }
+  #status { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  #chat { flex: 1; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; min-height: 260px; }
+  .msg { max-width: 80%; padding: 10px 14px; border-radius: 14px; white-space: pre-wrap; line-height: 1.55; }
+  .user { align-self: flex-end; background: var(--main); color: #fff; }
+  .ai { align-self: flex-start; background: var(--card); border: 1px solid var(--line); }
+  .hint { color: var(--muted); text-align: center; margin: auto; }
+  #speed { font-size: 12px; color: var(--muted); text-align: right; }
+  #form { display: flex; gap: 8px; }
+  #input { flex: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title">🤖 나만의 AI</h1>
+    <span id="net">🟢 인터넷 연결됨</span>
+  </header>
+
+  <div class="card">
+    <div class="row">
+      <label>AI 성격</label>
+      <select id="preset"></select>
+      <label>AI 이름</label>
+      <input id="name" value="나만의 AI" size="12">
+      <label>모델</label>
+      <select id="model"></select>
+      <button id="start">▶ AI 깨우기</button>
+    </div>
+    <label>시스템 프롬프트 (AI에게 주는 역할 카드) — 직접 고쳐보세요!</label>
+    <textarea id="system" rows="4"></textarea>
+    <progress id="bar" value="0" max="1"></progress>
+    <div id="status">▶ AI 깨우기를 누르면 모델을 내려받아요 (처음 한 번 1~2GB, 다음부터는 바로 시작)</div>
+  </div>
+
+  <div id="chat" class="card"><p class="hint">AI를 깨운 뒤 말을 걸어보세요 👋</p></div>
+  <div id="speed"></div>
+
+  <form id="form">
+    <textarea id="input" rows="2" placeholder="메시지를 입력하세요 (Enter = 보내기, Shift+Enter = 줄바꿈)" disabled></textarea>
+    <button id="send" disabled>보내기</button>
+    <button type="button" id="stop" class="sub" disabled>멈춤</button>
+    <button type="button" id="reset" class="sub" disabled>새 대화</button>
+  </form>
+</div>
+
+<script type="module">
+import { CreateMLCEngine } from "https://esm.run/@mlc-ai/web-llm@0.2.87";
+
+// ① 나만의 AI 설정 — 여기를 바꾸면 나만의 AI가 돼요!
+const PRESETS = {
+  "진로 상담 선생님": "너는 고등학생의 진로 고민을 들어주는 따뜻한 진로 상담 선생님이야. 먼저 학생의 마음에 공감하고, 질문을 하나씩 하며 함께 생각해. 한국어 존댓말로 3~4문장 이내로 짧게 대답해.",
+  "한빛고 안내 도우미": "너는 한빛고등학교 안내 도우미야. 아래 [학교 정보]에 있는 내용만 사용해서 친절하게 대답하고, 정보에 없는 내용은 '선생님께 여쭤보세요'라고 말해. 한국어로 짧게 대답해.\n\n[학교 정보]\n(여기에 우리 학교 정보를 붙여넣으세요. 예: 급식 시간, 동아리 목록, 시험 일정)",
+  "영어 회화 친구": "You are a friendly English conversation partner for a Korean high school student. Use easy English and keep each reply under 3 sentences. If the student makes a mistake, gently show the correct sentence. If the student writes in Korean, answer in English and add a Korean translation in parentheses.",
+  "세종대왕": "너는 조선의 세종대왕이야. 백성을 아끼는 마음으로, 품위 있는 옛 말투(~하노라, ~이니라)로 대답해. 확실하지 않은 역사 이야기는 지어내지 말고 모른다고 말해. 3~4문장 이내로 짧게 대답해.",
+  "직접 만들기": "너는 ________ 이야. ________ 말투로 대답해. ________ 은 절대 하지 마. 한국어로 3~4문장 이내로 짧게 대답해.",
+};
+const MODELS = {
+  "Qwen3.5-2B (추천 · 한국어 무난)": "Qwen3.5-2B",
+  "Gemma 4 E2B (구글 · 고사양 PC)": "gemma-4-E2B-it",
+  "Qwen3.5-4B (가장 똑똑 · 느림)": "Qwen3.5-4B",
+  "Qwen2.5-1.5B (저사양 PC 비상용)": "Qwen2.5-1.5B-Instruct",
+};
+
+const $ = (id) => document.getElementById(id);
+let engine = null;      // 브라우저 안에서 돌아가는 AI 엔진
+let messages = [];      // 지금까지의 대화 기록
+let modelId = "";       // 지금 불러온 모델 이름
+
+for (const k in PRESETS) $("preset").add(new Option(k, k));
+for (const k in MODELS) $("model").add(new Option(k, MODELS[k]));
+$("system").value = PRESETS[$("preset").value];
+$("preset").onchange = () => { $("system").value = PRESETS[$("preset").value]; resetChat(); };
+$("name").oninput = () => { $("title").textContent = "🤖 " + ($("name").value || "나만의 AI"); };
+
+// 인터넷 연결 표시 — 모델을 받은 뒤 와이파이를 꺼보세요!
+function showNet() {
+  $("net").textContent = navigator.onLine ? "🟢 인터넷 연결됨" : "🔌 인터넷 끊김 — 그래도 AI는 대답해요!";
+  $("net").className = navigator.onLine ? "" : "off";
+}
+window.addEventListener("online", showNet);
+window.addEventListener("offline", showNet);
+showNet();
+
+// ② 모델 불러오기 — 처음 한 번만 내려받고, 다음부터는 저장된 파일을 써요
+async function loadModel() {
+  if (!navigator.gpu) {
+    $("status").textContent = "❌ 이 브라우저는 WebGPU를 지원하지 않아요. 최신 크롬으로 열거나, Colab 예비안으로 진행하세요.";
+    return;
+  }
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) {
+    $("status").textContent = "❌ 그래픽카드(GPU)를 찾지 못했어요. Colab 예비안으로 진행하세요.";
+    return;
+  }
+  const q = adapter.features.has("shader-f16") ? "q4f16_1" : "q4f32_1";   // 그래픽카드에 맞는 버전 고르기
+  modelId = `${$("model").value}-${q}-MLC`;
+  $("start").disabled = true;
+  try {
+    const report = (p) => { $("bar").value = p.progress; $("status").textContent = p.text; };
+    if (engine) {
+      engine.setInitProgressCallback(report);
+      await engine.reload(modelId);
+    } else {
+      engine = await CreateMLCEngine(modelId, { initProgressCallback: report });
+    }
+    $("status").textContent = `✅ ${modelId} 준비 완료! 이제 이 AI는 내 컴퓨터 안에서 돌아가요.`;
+    ["input", "send", "reset"].forEach((id) => $(id).disabled = false);
+    resetChat();
+    $("input").focus();
+  } catch (err) {
+    $("status").textContent = "❌ 모델을 불러오지 못했어요: " + err.message;
+  } finally {
+    $("start").disabled = false;
+  }
+}
+
+// ③ 대화하기 — 역할 카드 + 대화 기록을 함께 보내고, 대답을 한 글자씩 받아요
+async function ask(question) {
+  messages.push({ role: "user", content: question });
+  addBubble("user", question);
+  const bubble = addBubble("ai", "…");
+  setBusy(true);
+  let reply = "";
+  try {
+    const stream = await engine.chat.completions.create({
+      messages: [{ role: "system", content: $("system").value }, ...messages.slice(-10)],
+      stream: true,
+      stream_options: { include_usage: true },
+      temperature: 0.7,
+      extra_body: { enable_thinking: modelId.startsWith("Qwen3") ? false : undefined },   // 생각 모드 끄기
+      max_tokens: 512,
+    });
+    for await (const chunk of stream) {
+      reply += chunk.choices[0]?.delta?.content || "";
+      bubble.textContent = reply.replace(/<think>[\s\S]*?(<\/think>|$)/g, "").trim() || "…";
+      $("chat").scrollTop = $("chat").scrollHeight;
+      if (chunk.usage?.extra) $("speed").textContent = `⚡ 초당 ${chunk.usage.extra.decode_tokens_per_s.toFixed(1)} 토큰`;
+    }
+  } catch (err) {
+    reply = reply || "❌ 오류: " + err.message;
+    bubble.textContent = reply;
+  }
+  reply = reply.replace(/<think>[\s\S]*?(<\/think>|$)/g, "").trim();
+  messages.push({ role: "assistant", content: reply });
+  setBusy(false);
+}
+
+function addBubble(who, text) {
+  if ($("chat").querySelector(".hint")) $("chat").innerHTML = "";
+  const div = document.createElement("div");
+  div.className = "msg " + who;
+  div.textContent = text;
+  $("chat").appendChild(div);
+  $("chat").scrollTop = $("chat").scrollHeight;
+  return div;
+}
+
+function setBusy(busy) {
+  $("send").disabled = busy;
+  $("input").disabled = busy;
+  $("stop").disabled = !busy;
+  if (!busy) $("input").focus();
+}
+
+function resetChat() {
+  messages = [];
+  $("chat").innerHTML = '<p class="hint">새 대화를 시작해요 👋</p>';
+  $("speed").textContent = "";
+}
+
+$("start").onclick = loadModel;
+$("stop").onclick = () => engine?.interruptGenerate();
+$("reset").onclick = resetChat;
+$("form").onsubmit = (e) => {
+  e.preventDefault();
+  const q = $("input").value.trim();
+  if (!q || !engine || $("send").disabled) return;
+  $("input").value = "";
+  ask(q);
+};
+$("input").onkeydown = (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("form").requestSubmit(); }
+};
+</script>
+</body>
+</html>
